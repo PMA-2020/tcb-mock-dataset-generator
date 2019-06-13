@@ -1,0 +1,17 @@
+/.idea
+/data/db_backups/
+/env/
+/.env
+/logs/
+/*.pid
+/tags
+__pycache__/
+dev/
+temp/
+*~$*
+*.swp
+*ignored*
+.DS_Store
+*.csv
+*.xls*
+personnel.txt
