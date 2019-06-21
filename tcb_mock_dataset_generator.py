@@ -13,7 +13,8 @@ import csv
 from copy import copy
 from datetime import date
 from random import randint, random as random_0_to_1, choice as random_choice
-from typing import Callable, List, Dict, Any, Union
+from statistics import mean
+from typing import Callable, List, Dict, Any
 
 # Edit these values as needed, then simply run this module.
 COMPOSITE_ID_FIELDS: List[str] = ['Date', 'Person', 'Scorer']
@@ -29,7 +30,7 @@ SKILLS: List[str] = \
      'Q8', 'Q9', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'S1', 'S2', 'S3', 'T1',
      'T2', 'U1', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9', 'V1', 'W1',
      'X1', 'X2', 'X3']
-SCORER_TYPES: List[str] = ['self', 'PI', 'DM', 'ODK', 'SO']
+SCORER_TYPES: List[str] = ['Self', 'PI', 'DM', 'ODK', 'SO']
 NUM_SCORERS: int = len(SCORER_TYPES)
 FIRST_VAL_IDX: int = \
     len(COMPOSITE_ID_FIELDS) + SKILL_FIELD_REPEATS.index('score') + 1
@@ -44,6 +45,8 @@ HEADER: List[str] = \
      for field_type in SKILL_FIELD_REPEATS]
 SKILL_FIELD_FUNCS: Dict[str, Callable] = {
     'Date': lambda: START_DATE,
+    'Person': lambda person_name: person_name,
+    'Scorer': lambda scorer_type: scorer_type,
     'notes': lambda: 'This is a miscellaneous note.',
     'current_capacity': lambda: '',
     'targeted_capacity': lambda: '',
@@ -52,8 +55,12 @@ SKILL_FIELD_FUNCS: Dict[str, Callable] = {
     'score': RAND_SCORE_FUNC
 }
 CONFIG: Dict[str, Any] = {
-    'min': SCORE_MIN,
-    'max': SCORE_MAX,
+    'score_min': SCORE_MIN,
+    'score_max': SCORE_MAX,
+    'num_target_skills_min': 3,
+    'num_target_skills_max': 5,
+    'personal_target_quarterly_increment_min': 1,
+    'personal_target_quarterly_increment_max': 2,
     'num_cols': len(HEADER),
     'input_file_path': './input.csv',
     'input_personnel_list_path': './personnel.txt',
@@ -132,34 +139,116 @@ def get_num_rows(
 
 
 def generate_baseline_values(
-    n_cols: int = CONFIG['num_cols'],
-    n_rows: int = get_num_rows(),
     field_funcs_by_index: Dict[int, Callable] = get_field_funcs(),
+    personnel: List[str] = get_personnel_list(),
 ) -> List[List[Any]]:
     """Create a dataset of random numbers.
 
     Args:
-        n_cols (int): Number of dataset columns
-        n_rows (int): Number of dataset rows
         field_funcs_by_index (dict): Indices of "special fields", that
         is, fields to run the "special_field_func" rather than using randint,
         and corresponding functions to run to generate a value that is used in
         substitution.
+        personnel (list): List of personnel to generate baseline data for
 
     Returns:
         list: Two-dimensional array as dataset
     """
-    two_dim_array: List[List[Any]] = []
+    # baseline
+    baseline: List[List[Any]] = []
+    for person in personnel:
+        for scorer in SCORER_TYPES:
+            row: List[Any] = []
+            for i in range(len(HEADER)):
+                if i == HEADER.index('Person'):
+                    val = person
+                elif i == HEADER.index('Scorer'):
+                    val = scorer
+                else:
+                    val: Any = field_funcs_by_index[i]()
+                row.append(val)
+            baseline.append(row)
 
-    for i in range(n_rows):
-        row: List = []
-        for j in range(n_cols):
-            special_operation: Callable = field_funcs_by_index[j]
-            val: Union[Any, int] = special_operation()
-            row.append(val)
-        two_dim_array.append(row)
+    # with current capacities
+    with_current_capacities: List[List[Any]] = []
+    for person in personnel:
+        persons_rows: List[Any] = \
+            [x for x in baseline if x[HEADER.index('Person')] == person]
+        for skill in SKILLS:
+            score_field: str = skill + '_' + 'score'
+            current_capacity_field: str = skill + '_' + 'current_capacity'
+            scores: List[int] = \
+                [x[HEADER.index(score_field)] for x in persons_rows]
+            avg_capacity: int = round(mean(scores))
+            current_capacity = randint(avg_capacity-1, avg_capacity+1)
+            for row in persons_rows:
+                row[HEADER.index(current_capacity_field)] = current_capacity
+        for row in persons_rows:
+            with_current_capacities.append(row)
 
-    return two_dim_array
+    # with target capacities
+    with_target_capacities: List[List[Any]] = []
+    current_capacity_field_names: List[str] = \
+        [x + '_' + 'current_capacity' for x in SKILLS]
+    current_capacity_field_indices: List[int] = \
+        [HEADER.index(x) for x in current_capacity_field_names]
+    for person in personnel:
+        persons_rows: List[List[Any]] = \
+            [x for x in baseline if x[HEADER.index('Person')] == person]
+
+        # filter to possible target skills
+        representative_row: List[Any] = persons_rows[0]
+        eligible_skillup_indices: List[int] = [
+            x for x in current_capacity_field_indices
+            if representative_row[x] < CONFIG['score_max']]
+        eligible_skillup_current_capacity_field_names: List[str] = [
+            HEADER[x] for x in eligible_skillup_indices]
+        skill_pool: List[str] = [
+            x.replace('_current_capacity', '')
+            for x in eligible_skillup_current_capacity_field_names]
+
+        # choose targets
+        targeted_skills: List[str] = []
+        num_targets: int = randint(
+            CONFIG['num_target_skills_min'],
+            CONFIG['num_target_skills_max'])
+        for i in range(num_targets):
+            picked: str = random_choice(skill_pool)
+            if picked not in targeted_skills:
+                targeted_skills.append(picked)
+            else:
+                i -= 1  # a substitute for recursion
+
+        # get target capacities
+        target_skill_vals: Dict[str, int] = {}
+        for skill in targeted_skills:
+            rand_increment: int = randint(
+                CONFIG['personal_target_quarterly_increment_min'],
+                CONFIG['personal_target_quarterly_increment_max'])
+            current_capacity: int = \
+                representative_row[HEADER.index(skill + '_current_capacity')]
+            target_if_uncapped: int = current_capacity + rand_increment
+            target_capacity: int = target_if_uncapped \
+                if target_if_uncapped <= CONFIG['score_max'] \
+                else CONFIG['score_max']
+            target_skill_vals[skill + '_targeted_capacity'] = target_capacity
+
+        # generate new person rows
+        new_person_rows: List[List[Any]] = []
+        for row in persons_rows:
+            new_row: List[Any] = []
+            for idx, val in enumerate(row):
+                field_name: str = HEADER[idx]
+                new_val: Any = \
+                    val if field_name not in target_skill_vals.keys() \
+                    else target_skill_vals[field_name]
+                new_row.append(new_val)
+            new_person_rows.append(new_row)
+
+        for row in new_person_rows:
+            with_target_capacities.append(row)
+
+    return with_target_capacities
 
 
 def add_composite_key_padding(
@@ -253,7 +342,7 @@ def random_mutation(
     input_value: int,
     min_increment: int = CONFIG['mutation_min_increment'],
     max_increment: int = CONFIG['mutation_max_increment'],
-    value_celing: int = CONFIG['max'],
+    value_celing: int = CONFIG['score_max'],
     pct_chance: float = CONFIG['mutation_pct_chance'],
 ) -> int:
     """Takes an integer and 
@@ -340,9 +429,7 @@ def run(config: Dict = CONFIG):
     Args:
         config (dict): Dictionary containing configuration options.
     """
-    baseline: List[List[Any]] = generate_baseline_values(
-        n_cols=config['num_cols'],
-        n_rows=get_num_rows(),)
+    baseline: List[List[Any]] = generate_baseline_values()
     timeseries: List[List[Any]] = generate_timeseries(
         baseline=baseline,
         mutation_func=random_mutation,
@@ -356,6 +443,7 @@ def run(config: Dict = CONFIG):
     save_csv(
         array=dataset,
         path=config['output_file_path'])
+    print('Saved to: ' + config['output_file_path'])
 
 
 if __name__ == '__main__':
